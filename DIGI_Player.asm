@@ -71,11 +71,43 @@ ptr     = $fd           ; pointer to current byte of sample
         LDA #>DATASTART         ; high byte
         STA ptr+1               ;
 
-        LDY #$00                ; zero out flag used for
-        STY flag                ; indicating which nibble to play
-        LDA (ptr),y             ; loads first sample byte
-        STA sample              ; save to temp storage address
+; *** need to load a sample and determine if it is RLE
+; *** if byte is $00 that is RLE marker, next byte is #Nibbles|value
+       
+        LDA #$01                ; flag should start at 1
+        STA flag                ; denotes a non RLE byte
+        LDY #$00                ; set offset to first byte
+        LDA (ptr),y;            ; load in first sample byte
+        STA sample              ; save just in case it is not RLE
+        BNE @skip               ; skip ahead if not RLE marker of $00
 
+        ; here we decode an RLE pair
+        INC ptr                 ; inc point to next sample byte      
+        LDA (ptr),y             ; load RLE byte in
+        TAX                     ; save a copy of RLE byte
+        LSR A                   ; shift count down to low nibble
+        LSR A                   ; encoded count is actual - 1
+        LSR A                   ; additional copy of value in high nibble
+        LSR A                   ; gives us proper # for playback
+        STA flag                ; save count
+        TXA                     ; get back our original byte
+        AND #$0F                ; mask off high nibble
+        STA sample              ; save our low nibble only
+        CLC                     ; make sure carry bit clear
+        ROL                     ; shift low nibble up to high nibble
+        ROL                     ;
+        ROL                     ;
+        ROL                     ; now we have copy of low nibble in high nibble
+        ORA sample              ; OR to combine both nibbles
+        STA sample              ; store back to sample byte address  
+
+; *** old first sample code
+;        LDY #$00                ; zero out flag used for
+;        STY flag                ; indicating which nibble to play
+;        LDA (ptr),y             ; loads first sample byte
+;        STA sample              ; save to temp storage address
+
+@skip
         ; setup CIA #2, do last as it starts interrupts!
         LDA #<freq              ; interrupt freq
         STA $DD04               ; TA LO
@@ -112,10 +144,22 @@ NMI_HANDLER
          LDA $DD0D              ; clear NMI
 
          ;every other NMI do *1 or *2
-         LDA flag               ; if flag==0 we just played upper nibble
-         BNE lower              ; so skip ahead to load new byte
-         
-upper    LDA sample             ; *1 shift upper nibble down
+         LDA flag               ; if flag==0 we should play upper nibble next
+         ;BNE lower              ; so skip ahead to load new byte
+         BEQ loadByte           ; load a new byte from sample data
+
+; *** 'flag' is now a counter of how many times to play the lower nibble
+; *** if flag > 1, flag -= 1, exit
+; *** if flag = 0, shift upperNibble to lowerNibble, exit
+; *** 
+
+         DEC flag               ; decrement count
+         LDA flag               ; get current count
+         BEQ upper              ; we are ready for upper nibble now
+         JMP exit               ; done for this pass
+     
+upper    
+         LDA sample             ; *1 shift upper nibble down
          LSR a
          LSR a
          LSR a
@@ -123,19 +167,50 @@ upper    LDA sample             ; *1 shift upper nibble down
          STA sample             ; store it back to play next pass
          JMP exit               ; all done for this pass
 
-; *** 'flag' is now a counter of how many times to play the lower nibble
-; *** if flag > 1, flag -= 1, exit
-; *** if flag == 1, flag = 0, shift upperNibble to lowerNibble, exit
-; *** if flag == 0, load new sample, if RLE flag = #nibbles, else flag = 1
 
-lower    LDY #0                 ; *2 get a new packed sample byte
-         LDA (ptr),y            ;       
-         STA sample             ; save to temp location
-         INC ptr                ; inc point to next sample byte
-         BNE checkend           ; did we roll low byte over to zero?
-         INC ptr+1              ; if so inc the high byte of pointer too
+;lower
+loadByte
+         LDY #$00                ; set offset to first byte
+         LDA (ptr),y;            ; load in first sample byte
+         STA sample              ; save just in case it is not RLE
+         BEQ rle                 ; if $00 is RLE marker, go to decoder
+         LDA #$01                ; set the flag to 1
+         STA flag                ; for non-RLE encoded
+         INC ptr                 ; inc the saple pointer
+         BNE checkend            ; if we did not roll over low byte skip ahead
+         INC ptr+1               ; inc the high byte
+         JMP checkend            ; skip the REL decoder
+
+rle      ; here we decode an RLE pair
+         INC ptr                 ; inc point to next sample byte
+         LDA (ptr),y             ; load RLE byte in
+         TAX                     ; save a copy of RLE byte
+         LSR A                   ; shift count down to low nibble
+         LSR A                   ; encoded count is actual - 1
+         LSR A                   ; additional copy of value in high nibble
+         LSR A                   ; gives us proper # for playback
+         STA flag                ; save count
+         TXA                     ; get back our original byte
+         AND #$0F                ; mask off high nibble
+         STA sample              ; save our low nibble only
+         CLC                     ; make sure carry bit clear
+         ROL                     ; shift low nibble up to high nibble
+         ROL                     ;
+         ROL                     ;
+         ROL                     ; now we have copy of low nibble in high nibble
+         ORA sample              ; OR to combine both nibbles
+         STA sample              ; store back to sample byte address
+
+; *** original load new sample byte
+;         LDY #0                 ; *2 get a new packed sample byte
+;         LDA (ptr),y            ;       
+;         STA sample             ; save to temp location
+;         INC ptr                ; inc point to next sample byte
+;         BNE checkend           ; did we roll low byte over to zero?
+;         INC ptr+1              ; if so inc the high byte of pointer too
          
-checkend LDA ptr                ; if not at end of sample exit/return from NIM
+checkend 
+         LDA ptr                ; if not at end of sample exit/return from NMI
          CMP #<DATASTOP         ; low byte
          BNE exit               ;
          LDA ptr+1              ; high byte
@@ -158,12 +233,11 @@ checkend LDA ptr                ; if not at end of sample exit/return from NIM
          LDA #$37               ; reset kernal banking
          STA $01                ;
 
-exit     
-         LDA flag               ; toggle hi/low nibble flag and exit NMI
-         EOR #1                 ;
-         STA flag               ;
-
-         PLA                    ; restore state
+;exit     
+;         LDA flag               ; toggle hi/low nibble flag and exit NMI
+;         EOR #1                 ;
+;         STA flag               ;
+exit     PLA                    ; restore state
          TAY                    ;
          PLA                    ;
          TAX                    ;
