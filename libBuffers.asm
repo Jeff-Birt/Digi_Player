@@ -70,7 +70,7 @@ defm    OutBufRead
         ldx outBufTail          ; (3) grap the tail pointer
         cpx outBufHead          ; (3) comapre to head pointer
         beq rdone               ; (3) Z=0 empty, if Z=0 then C=1
-        lda outBuf,x            ; (6) laod value, X indexed
+        lda outBuf,x            ; (6) load value, X indexed
         inx                     ; (2) inc tail pointer, does not affect C
         stx outBufTail          ; (3) save inremented tail pointer
 ;        ldx #$01                ; (2) so BNE/BEQ can be used
